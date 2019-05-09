@@ -1,0 +1,242 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <alloca.h>
+#include <string.h>
+
+#define FRAME_SIZE 256
+#define TOTAL_FRAMES 256
+#define ADDRESS_MASK 0xFFFF
+#define OFFSET_MASK 0xFF
+#define TLB_SIZE 16
+#define PAGE_TABLE_SIZE 256
+#define BUFFER 10
+#define READ_CHUNK 256
+
+//creating tables
+int pTableFrames[PAGE_TABLE_SIZE];
+int pTableNums[PAGE_TABLE_SIZE];
+signed char val;
+
+//creating tlb tables size 16
+int TLBFrameNum[TLB_SIZE];
+int TLBPageNum[TLB_SIZE];
+
+//physical memory
+int physicalMemory[TOTAL_FRAMES][FRAME_SIZE];
+
+int pageFault = 0;
+int TLBHits = 0;
+int firstAvaPageTableNum = 0;
+int firstAvaFrame = 0;
+int numOfTLBEntries =0;
+
+char address[BUFFER];
+int logicalAddress;
+
+signed char buffer[READ_CHUNK];
+
+//files
+FILE *addressFile;
+FILE *backing;
+
+//prototypes
+void getPage(int logical_address);
+void readFromStore(int pageNum);
+void insertIntoTLB(int pageNUm, int frameNum);
+void printStats(int translatedNum);
+//------------------------------------------------------------------
+int main(int argc, char* argv[])
+{
+  int numOfTranslatedAddys = 0;
+  addressFile = fopen(argv[1], "r"); //user inputs file into command
+  backing = fopen("BACKING_STORE.bin","rb");
+
+  if( (addressFile == NULL) || (backing == NULL))
+       {
+	 printf("error! can't open the files.\n");
+	 return -1;	 
+       }
+
+  while(fgets(address, BUFFER, addressFile) != NULL)
+    {
+      logicalAddress = atoi(address);
+      getPage(logicalAddress);
+      numOfTranslatedAddys++;
+    }
+  
+  printStats(numOfTranslatedAddys);
+  
+  return 0;
+
+}
+
+//--------------------------------
+void readFromStore(int pageNum)
+{
+  if(fseek( backing, pageNum * READ_CHUNK, SEEK_SET) != 0)
+    {
+      fprintf(stderr, "error seeking in backing store\n");
+      printf("error in reading backing store\n");
+    }
+
+if(fread(buffer, sizeof(signed char), READ_CHUNK, backing) ==0)
+  {
+    fprintf(stderr, "error in reading backing store\n");
+    printf("error in reading backing store\n");
+
+  }
+
+for(int i =0; i < READ_CHUNK; i++)
+  {
+    physicalMemory[firstAvaFrame][i] = buffer[i];
+  }
+
+pTableNums[firstAvaPageTableNum] = pageNum;
+pTableFrames[firstAvaPageTableNum] = firstAvaFrame;
+
+firstAvaFrame++;
+firstAvaPageTableNum++;
+return;
+
+}
+
+//------------------------------------------
+
+void getPage(int logical_address)
+{
+  int pageNum = (( logical_address & ADDRESS_MASK) >> 8);
+  int offset = (logical_address & OFFSET_MASK);
+
+  int frameNum =-1;
+
+  int i;
+  for(i=0; i<TLB_SIZE;i++)
+    {
+      if(TLBPageNum[i] == pageNum)
+	{
+	  frameNum = TLBFrameNum[i];
+	  TLBHits++;
+	}//end of if
+    }//end of for loop
+  
+  //if:2
+  if(frameNum == -1)
+    {
+      int i;
+      for(i=0;i < firstAvaPageTableNum;i++)
+	{
+	  if(pTableNums[i] == pageNum)
+	    {
+	      frameNum = pTableFrames[i];
+	    }//end of if
+	}//end of for loop
+      
+      
+      
+      if(frameNum == -1)//meaning a fault has occured
+	{
+	  readFromStore(pageNum);
+	  pageFault++;
+	  frameNum = firstAvaFrame -1;
+	}//end of if
+      
+    }//end of the outer if:2
+
+  insertIntoTLB(pageNum, frameNum);
+  val = physicalMemory[frameNum][offset];
+  printf("offset: %d\n", offset);
+
+  printf("--------------------------------\n");
+
+  printf("Frame number: %d\n", frameNum);
+
+  printf("--------------------------------\n");
+
+  printf("virtual address: %d , Physical address: %d, Value: %d \n", logicalAddress,
+	 (frameNum << 8) | offset, val);
+
+
+
+  insertIntoTLB(pageNum, frameNum);
+}//end of functon
+
+
+void insertIntoTLB(int pageNum, int frameNum)
+{
+  int i;
+
+  for(i=0;i<numOfTLBEntries;i++)
+    {
+      if(TLBPageNum[i] == pageNum)
+	break;
+    }//end of for
+
+  if(i==numOfTLBEntries)
+    {
+
+      if(numOfTLBEntries < TLB_SIZE)
+	{
+	  TLBPageNum[numOfTLBEntries] = pageNum;
+	  TLBFrameNum[numOfTLBEntries] = frameNum;
+	}//end of inner if
+      else{
+
+	for(i = 0; i < TLB_SIZE -1; i++)
+	  {
+	    TLBPageNum[i] = TLBPageNum[i+1];
+	    TLBFrameNum[i] = TLBFrameNum[i+1];
+
+	  }//end of for
+
+	TLBPageNum[numOfTLBEntries-1] = pageNum;
+	TLBFrameNum[numOfTLBEntries-1] = frameNum;
+
+      }//end of else
+      
+    }//end of if
+
+  else{
+    for(i=1; i<numOfTLBEntries-1;i++)
+      {
+	TLBPageNum[i] = TLBPageNum[i+1];
+	TLBFrameNum[i] = TLBFrameNum[i+1];
+      }//end of for
+
+    if(numOfTLBEntries < TLB_SIZE)
+      {
+	TLBPageNum[numOfTLBEntries] = pageNum;
+	TLBFrameNum[numOfTLBEntries] = frameNum;
+      }//end of if
+
+    else {
+
+      TLBPageNum[numOfTLBEntries] = pageNum;
+      TLBFrameNum[numOfTLBEntries] = frameNum;
+
+    }//end of else
+
+    if(numOfTLBEntries < TLB_SIZE)
+      numOfTLBEntries++;
+
+  }//end of second else
+
+
+
+}//end of function: insertIntoTLB
+
+
+void printStats(int translatedNum)
+{
+  double pageFaultRate = pageFault/(double)translatedNum;
+  double tableHitRate = TLBHits/(double)translatedNum;
+
+  printf("stats:\n");
+  printf("--------------------------------\n");
+
+  printf("/tpage-fault-rate = %f\n", pageFaultRate);
+  printf("/tTLB hit rate = %f\n", tableHitRate);
+
+  printf("--------------------------------\n");
+
+
+}//end of print function
